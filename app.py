@@ -56,16 +56,25 @@ def parse_speed_to_kmh(s: str) -> float:
     s_num = "".join(ch for ch in s if (ch.isdigit() or ch == "."))
     return float(s_num) if s_num else math.nan
 
-def parse_distance_to_km(s: str) -> float:
-    s = s.strip().lower().replace(" ", "")
+def parse_distance_to_km(s) -> float:
+    # приемаме и числа, и текст
+    if isinstance(s, (int, float)):
+        return float(s)
+    s = str(s).strip().lower().replace(" ", "")
     if not s:
         return math.nan
-    if s in {"marathon", "maraton"}: return 42.195
-    if s in {"half", "halfmarathon", "polumaraton"}: return 21.097
-    if s.endswith("m"): return float(s[:-1]) / 1000.0
-    if s.endswith("km"): return float(s[:-2])
-    if s.endswith("k"): return float(s[:-1])
-    if s.replace(".", "", 1).isdigit(): return float(s)
+    if s in {"marathon", "maraton"}:
+        return 42.195
+    if s in {"half", "halfmarathon", "polumaraton"}:
+        return 21.097
+    if s.endswith("m"):
+        return float(s[:-1]) / 1000.0
+    if s.endswith("km"):
+        return float(s[:-2])
+    if s.endswith("k"):
+        return float(s[:-1])
+    if s.replace(".", "", 1).isdigit():
+        return float(s)
     return math.nan
 
 # -----------------------------
