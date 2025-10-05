@@ -203,4 +203,84 @@ st.dataframe(df, use_container_width=True)
 # Export
 csv_bytes = df.to_csv(index=False).encode("utf-8")
 st.download_button("⬇️ Изтегли резултатите (CSV)", data=csv_bytes, file_name="vts_results.csv", mime="text/csv")
+# ===================== ADDON: Deviation chart + Quick queries =====================
+
+st.subheader("📈 Отклонение от идеала (скорост, %)")
+# чертаем линия по вече създадената таблица df
+try:
+    dev_series = df.set_index("Дистанция (km)")["% от идеала (скорост)"]
+    st.line_chart(dev_series)
+except Exception as _e:
+    st.info("Добави поне една опорна точка, за да има отклонение за визуализация.")
+
+st.subheader("⚡ Бързи заявки (от дистанция / време / скорост)")
+
+# малък помощник за парс на време mm:ss -> минути
+def _parse_time_to_min(x: str) -> float:
+    x = str(x).strip()
+    if not x:
+        return float("nan")
+    if ":" in x:
+        mm, ss = x.split(":")
+        return float(mm) + float(ss)/60.0
+    return float(x)
+
+# --- заявки ---
+qc1, qc2, qc3 = st.columns(3)
+
+with qc1:
+    st.markdown("**От дистанция → време и скорост**")
+    d_in = st.text_input("Дистанция (km/k/m)", key="q_dist", value="1km")
+    if st.button("Изчисли от дистанция"):
+        s = parse_distance_to_km(d_in)
+        if math.isnan(s):
+            st.error("Невалидна дистанция.")
+        else:
+            v_id, t_id = ideal_from_distance(s)
+            r = float(r_of_s(s))
+            v_p = max(v_id * r, 1e-9)
+            t_p = (s / v_p) * 60.0
+            st.write(f"**Персонална скорост:** {v_p:.3f} km/h")
+            st.write(f"**Персонално време:** {format_minutes_to_hms(t_p)}")
+            st.caption(f"(Идеал: {v_id:.3f} km/h, {format_minutes_to_hms(t_id)})")
+
+with qc2:
+    st.markdown("**От време → дистанция и скорост**")
+    t_in = st.text_input("Време (мин или mm:ss)", key="q_time", value="30")
+    if st.button("Изчисли от време"):
+        t_min = _parse_time_to_min(t_in)
+        if math.isnan(t_min) or t_min <= 0:
+            st.error("Невалидно време.")
+        else:
+            # инверсия на t(s): s по идеала
+            s_id = float(np.interp(t_min, t_tab, s_tab))
+            v_id = float(lin_interp_extrap(s_id, s_tab, v_tab))
+            r = float(r_of_s(s_id))
+            v_p = max(v_id * r, 1e-9)
+            st.write(f"**Персонална скорост:** {v_p:.3f} km/h")
+            st.write(f"**Персонална дистанция:** {s_id:.3f} km")
+            st.caption(f"(Идеал: {v_id:.3f} km/h, дистанция {s_id:.3f} km)")
+
+with qc3:
+    st.markdown("**От скорост → дистанция и време**")
+    v_in = st.text_input("Скорост (km/h или 5:00 min/km)", key="q_speed", value="22")
+    if st.button("Изчисли от скорост"):
+        v_target = parse_speed_to_kmh(v_in)
+        if math.isnan(v_target) or v_target <= 0:
+            st.error("Невалидна скорост.")
+        else:
+            # намираме s, където v_personal(s) ~ v_target
+            s_min, s_max = float(s_tab[0]), float(s_tab[-1])
+            s_search = np.linspace(s_min, s_max, 1200)
+            v_id_arr = lin_interp_extrap(s_search, s_tab, v_tab)
+            r_arr = r_of_s(s_search)
+            v_p_arr = np.maximum(v_id_arr * r_arr, 1e-9)
+            idx = int(np.argmin(np.abs(v_p_arr - v_target)))
+            s_sol = float(s_search[idx])
+            v_p = float(v_p_arr[idx])
+            t_p = (s_sol / v_p) * 60.0
+            st.write(f"**Персонална дистанция:** {s_sol:.3f} km")
+            st.write(f"**Персонално време:** {format_minutes_to_hms(t_p)}")
+            st.caption(f"(Персонална скорост на тази дистанция: {v_p:.3f} km/h)")
+# ===================== /ADDON =====================
 
