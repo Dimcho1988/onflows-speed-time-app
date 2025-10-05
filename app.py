@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import math
-from scipy.interpolate import interp1d
 
-# === Настройки на страницата ===
+# -------------------- Page config --------------------
 st.set_page_config(page_title="VTS Predictor — Ideal vs Personalized", layout="wide")
+st.title("VTS Predictor — Ideal vs Personalized")
 
-# === Помощни функции ===
+# -------------------- Helpers --------------------
 def parse_distance_to_km(s) -> float:
+    # приемаме и числа, и текст
     if isinstance(s, (int, float)):
         return float(s)
     s = str(s).strip().lower().replace(" ", "")
@@ -18,6 +19,7 @@ def parse_distance_to_km(s) -> float:
         return 42.195
     if s in {"half", "halfmarathon", "polumaraton"}:
         return 21.097
+    # ВАЖНО: първо km/k, после m
     if s.endswith("km"):
         return float(s[:-2])
     if s.endswith("k"):
@@ -28,134 +30,177 @@ def parse_distance_to_km(s) -> float:
         return float(s)
     return math.nan
 
-
 def parse_speed_to_kmh(s) -> float:
     if isinstance(s, (int, float)):
         return float(s)
     s = str(s).strip().lower().replace(" ", "")
     if not s:
         return math.nan
-    if "km/h" in s:
-        return float(s.replace("km/h", ""))
-    if "kph" in s:
-        return float(s.replace("kph", ""))
-    if ":" in s:  # мин/км
-        parts = s.split(":")
-        if len(parts) == 2:
-            mins, secs = parts
-            pace_min = float(mins) + float(secs) / 60.0
-            return 60.0 / pace_min
-    if s.replace(".", "", 1).isdigit():
-        return float(s)
-    return math.nan
-
+    # темпо min/km
+    if "min/km" in s or "/km" in s:
+        parts = [p for p in s.split("/") if "min" in p or ":" in p]  # tolerant
+        mm_ss = s.split("min")[0]
+        if ":" in mm_ss:
+            mm, ss = mm_ss.split(":")
+            pace_min = float(mm) + float(ss)/60.0
+            return 60.0/pace_min
+        try:
+            pace_min = float(mm_ss)
+            return 60.0/pace_min
+        except:
+            pass
+    # чисто число (приемаме km/h)
+    num = "".join(ch for ch in s if ch.isdigit() or ch == ".")
+    return float(num) if num else math.nan
 
 def format_minutes_to_hms(minutes: float) -> str:
-    """Преобразува време от минути във формат Ч:ММ:СС."""
     if pd.isna(minutes) or minutes <= 0:
         return "-"
-    total_seconds = int(minutes * 60)
-    hours = total_seconds // 3600
-    mins = (total_seconds % 3600) // 60
-    secs = total_seconds % 60
-    if hours > 0:
-        return f"{hours}:{mins:02d}:{secs:02d} ч"
-    else:
-        return f"{mins}:{secs:02d} мин"
+    total_seconds = int(round(minutes * 60))
+    h = total_seconds // 3600
+    m = (total_seconds % 3600) // 60
+    s = total_seconds % 60
+    return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m}:{s:02d}"
 
+def lin_interp_extrap(x, xp, fp):
+    """Линейна интерполация + линейна екстраполация в краищата (без SciPy)."""
+    x = np.asarray(x, float)
+    xp = np.asarray(xp, float)
+    fp = np.asarray(fp, float)
+    y = np.interp(x, xp, fp)  # вътрешно
+    # ляв край
+    m0 = (fp[1] - fp[0]) / (xp[1] - xp[0])
+    y = np.where(x < xp[0], fp[0] + (x - xp[0]) * m0, y)
+    # десен край
+    m1 = (fp[-1] - fp[-2]) / (xp[-1] - xp[-2])
+    y = np.where(x > xp[-1], fp[-1] + (x - xp[-1]) * m1, y)
+    return y
 
-# === Зареждане на идеалната крива ===
-st.title("🏃‍♂️ VTS Predictor — Ideal vs Personalized")
+def interp_flat_ends(x, xp, fp):
+    """Линейна интерполация; извън краищата държи постоянна стойност."""
+    x = np.asarray(x, float)
+    xp = np.asarray(xp, float)
+    fp = np.asarray(fp, float)
+    y = np.interp(x, xp, fp)
+    y = np.where(x < xp[0], fp[0], y)
+    y = np.where(x > xp[-1], fp[-1], y)
+    return y
 
-st.markdown("""
-1. Зареди **идеалната крива** (CSV с колони `distance_km`, `time_min`).
-2. Въведи **реални точки** на твоя атлет.
-3. Ще получиш прогнозен профил и процент от идеала.
-""")
+# -------------------- Load ideal curve --------------------
+st.markdown(
+    "1) Зареди **идеалната крива** (CSV с колони `distance_km`, `time_min`). "
+    "Можеш да качиш файл или да оставиш празно, за да се използва `ideal_distance_time_speed.csv` от репото."
+)
+uploaded = st.file_uploader("Качи CSV (по желание)", type=["csv"])
 
-uploaded_file = st.file_uploader("Качи CSV файл или остави празно (използва се вградената крива):", type=["csv"])
+try:
+    df_ideal = pd.read_csv(uploaded) if uploaded is not None else pd.read_csv("ideal_distance_time_speed.csv")
+except Exception as e:
+    st.error(f"Грешка при зареждане на CSV: {e}")
+    st.stop()
 
-if uploaded_file is not None:
-    df_ideal = pd.read_csv(uploaded_file)
-else:
-    df_ideal = pd.read_csv("ideal_distance_time_speed.csv")
+# почисти/сортирай
+df_ideal = df_ideal.dropna(subset=["distance_km", "time_min"]).copy()
+df_ideal = df_ideal.sort_values("distance_km")
+s_tab = df_ideal["distance_km"].values.astype(float)
+t_tab = df_ideal["time_min"].values.astype(float)
+v_tab = s_tab / (t_tab / 60.0)  # km / (min/60) = km/h
 
-# изчисляваме идеална скорост
-df_ideal["speed_kmh"] = df_ideal["distance_km"] / (df_ideal["time_min"] / 60)
+# помощни „идеални“ функции
+def ideal_from_distance(s):
+    v = float(lin_interp_extrap(s, s_tab, v_tab))
+    t = float(lin_interp_extrap(s, s_tab, t_tab))
+    return v, t  # km/h, min
 
-# създаваме интерполации
-ideal_speed_from_dist = interp1d(df_ideal["distance_km"], df_ideal["speed_kmh"], fill_value="extrapolate")
-ideal_time_from_dist = interp1d(df_ideal["distance_km"], df_ideal["time_min"], fill_value="extrapolate")
+def ideal_from_time(t_min):
+    # инверсия на t(s) чрез np.interp (монотонно растящо)
+    s = float(np.interp(t_min, t_tab, s_tab))
+    v = float(lin_interp_extrap(s, s_tab, v_tab))
+    return s, v
 
-# === Въвеждане на персонални данни ===
+# -------------------- Sidebar: anchors --------------------
 st.sidebar.header("Персонализация (опорни точки)")
+mode = st.sidebar.radio("Тип точки", ["distance + speed", "time + speed", "time + distance"])
+n_pts = st.sidebar.number_input("Брой точки", min_value=1, max_value=10, value=3)
 
-point_type = st.sidebar.radio("Тип точки", ["distance + speed", "time + speed", "time + distance"])
-num_points = st.sidebar.number_input("Брой точки", 1, 5, 3)
+anchors_s = []   # в домейна на дистанцията
+anchors_ratio = []  # r = v_real / v_ideal(s)
 
-points = []
-for i in range(num_points):
+for i in range(n_pts):
     st.sidebar.markdown(f"**[{i+1}] точка**")
-    if point_type == "distance + speed":
-        d = st.sidebar.text_input(f"[{i+1}] distance (km, k, m)", "")
-        v = st.sidebar.text_input(f"[{i+1}] speed (km/h или 5:00 min/km)", "")
-        if d and v:
-            dk = parse_distance_to_km(d)
-            vk = parse_speed_to_kmh(v)
-            points.append((dk, vk))
-    elif point_type == "time + speed":
-        t = st.sidebar.number_input(f"[{i+1}] time (мин)", 0.0)
-        v = st.sidebar.text_input(f"[{i+1}] speed (km/h или 5:00 min/km)", "")
-        if t and v:
-            vk = parse_speed_to_kmh(v)
-            dk = np.interp(t, df_ideal["time_min"], df_ideal["distance_km"])
-            points.append((dk, vk))
-    else:
-        t = st.sidebar.number_input(f"[{i+1}] time (мин)", 0.0)
-        d = st.sidebar.text_input(f"[{i+1}] distance (km, k, m)", "")
-        if t and d:
-            dk = parse_distance_to_km(d)
-            vk = dk / (t / 60)
-            points.append((dk, vk))
+    if mode == "distance + speed":
+        d_txt = st.sidebar.text_input(f"[{i+1}] distance (km/k/m)", value="" if i>=2 else ["2km","13km",""][i])
+        v_txt = st.sidebar.text_input(f"[{i+1}] speed (km/h или 5:00 min/km)", value="" if i>=2 else ["16","13",""][i])
+        if d_txt and v_txt:
+            s = parse_distance_to_km(d_txt); v_real = parse_speed_to_kmh(v_txt)
+            if not math.isnan(s) and not math.isnan(v_real):
+                v_id, _t_id = ideal_from_distance(s)
+                anchors_s.append(s); anchors_ratio.append(v_real / v_id if v_id>0 else 1.0)
+    elif mode == "time + speed":
+        t_val = st.sidebar.text_input(f"[{i+1}] time (мин или mm:ss)", value="" if i>=2 else ["7","67",""][i])
+        v_txt = st.sidebar.text_input(f"[{i+1}] speed (km/h или 5:00 min/km)", value="" if i>=2 else ["16","18",""][i])
+        if t_val and v_txt:
+            # позволи mm:ss
+            if ":" in t_val:
+                mm, ss = t_val.split(":"); t_min = float(mm) + float(ss)/60.0
+            else:
+                t_min = float(t_val)
+            s, v_id = ideal_from_time(t_min)
+            v_real = parse_speed_to_kmh(v_txt)
+            if not math.isnan(v_real):
+                anchors_s.append(s); anchors_ratio.append(v_real / v_id if v_id>0 else 1.0)
+    else:  # time + distance
+        t_val = st.sidebar.text_input(f"[{i+1}] time (мин или mm:ss)", value="" if i>=2 else ["30","60",""][i])
+        d_txt = st.sidebar.text_input(f"[{i+1}] distance (km/k/m)", value="" if i>=2 else ["5km","10km",""][i])
+        if t_val and d_txt:
+            if ":" in t_val:
+                mm, ss = t_val.split(":"); t_min = float(mm) + float(ss)/60.0
+            else:
+                t_min = float(t_val)
+            s = parse_distance_to_km(d_txt)
+            if not math.isnan(s):
+                v_real = s / (t_min/60.0) if t_min>0 else 0.0
+                _s_id, v_id = ideal_from_time(t_min)
+                anchors_s.append(_s_id); anchors_ratio.append(v_real / v_id if v_id>0 else 1.0)
 
-if len(points) >= 2:
-    points = sorted(points, key=lambda x: x[0])
-    x = [p[0] for p in points]
-    y = [p[1] for p in points]
-    personal_speed = interp1d(x, y, fill_value="extrapolate")
-    personal_factor = np.array([personal_speed(d) / ideal_speed_from_dist(d) for d in x])
-    factor_interp = interp1d(x, personal_factor, fill_value=(personal_factor[0], personal_factor[-1]))
-
-    distances = np.linspace(min(df_ideal["distance_km"]), max(df_ideal["distance_km"]), 40)
-    data = []
-    for d in distances:
-        ideal_v = float(ideal_speed_from_dist(d))
-        personal_v = ideal_v * float(factor_interp(d))
-        personal_t = (d / personal_v) * 60
-        data.append({
-            "distance_km": d,
-            "ideal_speed_kmh": ideal_v,
-            "personal_speed_kmh": personal_v,
-            "personal_time_min": personal_t,
-            "percent_of_ideal": personal_v / ideal_v * 100
-        })
-
-    df_results = pd.DataFrame(data)
-    df_results["време (ч:мм:сс)"] = df_results["personal_time_min"].apply(format_minutes_to_hms)
-
-    st.subheader("📊 Резултати:")
-    st.dataframe(df_results[[
-        "distance_km", "ideal_speed_kmh", "personal_speed_kmh", "време (ч:мм:сс)", "percent_of_ideal"
-    ]].rename(columns={
-        "distance_km": "Дистанция (km)",
-        "ideal_speed_kmh": "Идеална скорост (km/h)",
-        "personal_speed_kmh": "Персонална скорост (km/h)",
-        "percent_of_ideal": "% от идеала"
-    }), use_container_width=True)
-
-    # бутон за сваляне
-    csv = df_results.to_csv(index=False).encode('utf-8')
-    st.download_button("⬇️ Изтегли резултатите (CSV)", csv, "vts_results.csv", "text/csv")
+# r(s) интерполация (линейна, плоски краища)
+r_grid_fn = None
+if len(anchors_s) >= 1:
+    order = np.argsort(anchors_s)
+    s_anchor = np.asarray(anchors_s, float)[order]
+    r_anchor = np.asarray(anchors_ratio, float)[order]
+    def r_of_s(x):
+        return interp_flat_ends(x, s_anchor, r_anchor)
 else:
-    st.info("Въведи поне две опорни точки, за да се изчисли персонализираният модел.")
+    def r_of_s(x):
+        return np.ones_like(np.asarray(x, float))
+
+# -------------------- Range table --------------------
+st.header("Таблица: 100 m → Маратон + отклонение от идеала")
+distances = np.array(
+    [0.1,0.2,0.3,0.4,0.5,0.8,1.0,1.5,2.0,3.0,5.0,8.0,10.0,12.0,15.0,16.09,20.0,21.097,25.0,30.0,32.18,35.0,40.0,42.195],
+    dtype=float
+)
+
+rows = []
+for s in distances:
+    v_id, t_id = ideal_from_distance(s)
+    ratio = float(r_of_s(s))
+    v_prs = max(v_id * ratio, 1e-9)
+    t_prs = (s / v_prs) * 60.0
+    rows.append({
+        "Дистанция (km)": s,
+        "Идеална скорост (km/h)": v_id,
+        "Персонална скорост (km/h)": v_prs,
+        "Идеално време (ч:мм:сс)": format_minutes_to_hms(t_id),
+        "Персонално време (ч:мм:сс)": format_minutes_to_hms(t_prs),
+        "% от идеала (скорост)": 100.0 * v_prs / v_id if v_id>0 else np.nan
+    })
+
+df = pd.DataFrame(rows)
+st.dataframe(df, use_container_width=True)
+
+# Export
+csv_bytes = df.to_csv(index=False).encode("utf-8")
+st.download_button("⬇️ Изтегли резултатите (CSV)", data=csv_bytes, file_name="vts_results.csv", mime="text/csv")
 
