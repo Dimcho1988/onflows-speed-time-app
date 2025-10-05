@@ -1,0 +1,11 @@
+[server]
+headless = true
+enableCORS = false
+enableXsrfProtection = false
+fileWatcherType = "auto"
+
+[browser]
+gatherUsageStats = false
+
+[app]
+main = "vts/apps/streamlit_app.py"
