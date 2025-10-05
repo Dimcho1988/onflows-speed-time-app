@@ -60,22 +60,31 @@ def parse_distance_to_km(s) -> float:
     # приемаме и числа, и текст
     if isinstance(s, (int, float)):
         return float(s)
+
     s = str(s).strip().lower().replace(" ", "")
     if not s:
         return math.nan
+
+    # ключови думи
     if s in {"marathon", "maraton"}:
         return 42.195
     if s in {"half", "halfmarathon", "polumaraton"}:
         return 21.097
-    if s.endswith("m"):
-        return float(s[:-1]) / 1000.0
+
+    # ВАЖНО: първо 'km' и 'k', после 'm'
     if s.endswith("km"):
         return float(s[:-2])
     if s.endswith("k"):
         return float(s[:-1])
+    if s.endswith("m"):
+        return float(s[:-1]) / 1000.0
+
+    # чисто число (в км)
     if s.replace(".", "", 1).isdigit():
         return float(s)
+
     return math.nan
+
 
 # -----------------------------
 #  Monotone cubic interpolator (Fritsch–Carlson)
