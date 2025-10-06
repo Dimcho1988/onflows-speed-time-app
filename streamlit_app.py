@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,10 +11,12 @@ st.set_page_config(page_title="Speed–Time Model • onFlows", layout="wide")
 st.title("⚡ Индивидуален модел скорост–време (onFlows)")
 st.caption("Лек модел с интерполация + персонализация и изчисляване на Critical Speed (CS) и W'.")
 
+# ---------- Data loading ----------
 st.sidebar.header("1) Идеални данни")
 default_csv_path = Path("data/ideal_distance_time_speed.csv")
 
-uploaded = st.sidebar.file_uploader("Качи CSV с колони distance_km, time_min", type=["csv"]
+# ✅ поправен ред – има затваряща скоба
+uploaded = st.sidebar.file_uploader("Качи CSV с колони distance_km, time_min", type=["csv"])
 if uploaded:
     ideal_df = pd.read_csv(uploaded)
 else:
@@ -25,6 +26,7 @@ else:
         st.error("Липсва CSV с идеални данни. Качи файл в sidebar-а.")
         st.stop()
 
+# Validate basic schema
 required_cols = {"distance_km", "time_min"}
 if not required_cols.issubset(set(ideal_df.columns)):
     st.error(f"CSV трябва да съдържа колоните: {required_cols}. Открити: {list(ideal_df.columns)}")
@@ -32,18 +34,26 @@ if not required_cols.issubset(set(ideal_df.columns)):
 
 ideal_df = ideal_df.dropna().sort_values("distance_km")
 ideal_df["v_kmh"] = ideal_df["distance_km"] / (ideal_df["time_min"]/60.0)
+
 st.dataframe(ideal_df, use_container_width=True, hide_index=True)
 
 ideal = IdealModel.from_distance_time_points(list(zip(ideal_df["distance_km"], ideal_df["time_min"])))
 
+# ---------- Personalization points ----------
 st.sidebar.header("2) Персонализация (по избор)")
 st.sidebar.write("Добави реални тестове като двойки `(distance_km, v_real_kmh)`.")
-default_points = pd.DataFrame({"distance_km":[1.0, 3.0, 10.0], "v_real_kmh":[np.nan, np.nan, np.nan]})
+
+default_points = pd.DataFrame({
+    "distance_km":[1.0, 3.0, 10.0],
+    "v_real_kmh":[np.nan, np.nan, np.nan]
+})
 user_points_df = st.sidebar.data_editor(default_points, num_rows="dynamic", key="user_points")
 user_points_df = user_points_df.dropna()
+
 user_points = list(zip(user_points_df["distance_km"].tolist(), user_points_df["v_real_kmh"].tolist()))
 personal = PersonalModel.from_user_points(ideal, user_points)
 
+# ---------- CS & W' from 3' and 12' ----------
 st.sidebar.header("3) Critical Speed (CS) и W'")
 st.sidebar.write("По подразбиране скоростите за 3 и 12 мин се оценяват от персоналния модел. Можеш да ги презапишеш.")
 
@@ -66,8 +76,10 @@ except Exception as e:
     st.sidebar.error(f"CS/W' грешка: {e}")
     CS_mps, W_m = np.nan, np.nan
 
+# ---------- Main tabs ----------
 tab1, tab2, tab3 = st.tabs(["📈 Криви", "🔮 Прогнози", "🧮 Таблици"])
 
+# Shared s-grid
 s_grid = np.linspace(ideal_df["distance_km"].min(), ideal_df["distance_km"].max(), 200)
 v_id = personal.ideal.v_ideal(s_grid)
 t_id = personal.ideal.t_ideal(s_grid)
