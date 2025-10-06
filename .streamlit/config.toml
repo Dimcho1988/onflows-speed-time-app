@@ -1,2 +1,0 @@
-[app]
-main = "vts/apps/streamlit_app.py"
